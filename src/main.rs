@@ -1,6 +1,7 @@
 use axum::{
     Json, Router,
-    extract::Path,
+    extract::{Path, Query},
+    http::Uri,
     routing::{get, post},
     serve,
 };
@@ -27,6 +28,38 @@ struct ResponseUser {
     username: String,
     message: String,
 }
+
+// localhost:3000/items?page=2&per_page=30
+
+#[derive(Deserialize, Serialize)]
+struct Pagination {
+    page: Option<u64>,
+    per_page: Option<u64>,
+}
+
+#[derive(Deserialize, Serialize)]
+struct ResponseItems {
+    message: String,
+    page: u64,
+    per_page: u64,
+}
+
+async fn list_items(Query(pagination): Query<Pagination>) -> Json<ResponseItems> {
+    // format!(
+    //     "Page {} have {} items.",
+    //     pagination.page.unwrap_or(1),
+    //     pagination.per_page.unwrap_or(10)
+    // )
+
+    let res = ResponseItems {
+        message: "Hey, List items retrived succesfully.".to_string(),
+        per_page: pagination.per_page.unwrap_or(20),
+        page: pagination.page.unwrap_or(1),
+    };
+
+    Json(res)
+}
+
 // async fn get_question(Path((a, b)): Path<(u64, u64)>) -> String {
 //     format!("Question Id : {b}, Comment Id: {a}")
 // }
@@ -60,7 +93,19 @@ async fn main() {
             "/question/{question_id}/comment/{comment_id}",
             get(get_question),
         )
-        .route("/create_user", post(create_user));
+        .route("/create_user", post(create_user))
+        .route("/items", get(list_items));
+
+    let url = "http://localhost:3000/items?page=3&per_page=345"
+        .parse()
+        .unwrap();
+    let res: Query<Pagination> = Query::try_from_uri(&url).unwrap();
+
+    println!(
+        "Page : {}, Per Page : {}",
+        res.page.unwrap(),
+        res.per_page.unwrap()
+    );
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
 
