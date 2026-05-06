@@ -3,9 +3,9 @@ use std::{collections::HashMap, fmt::Error, sync::Arc};
 use axum::{
     Json, Router,
     body::Body,
-    extract::State,
+    extract::{Path, State},
     http::StatusCode,
-    routing::{Route, get, post, put},
+    routing::{Route, delete, get, post, put},
 };
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
@@ -23,6 +23,7 @@ async fn main() {
         .route("/task", post(add_task))
         .route("/task", get(read_tasks))
         .route("/task", put(update_task))
+        .route("/task/{id}", delete(delete_task))
         .with_state(state);
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
@@ -103,6 +104,28 @@ async fn update_task(
                 message: "Task doesn't exist".to_string(),
             }),
         ))
+    }
+}
+
+async fn delete_task(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<u32>,
+) -> Result<Json<TaskResponse>, Json<TaskResponse>> {
+    let mut state = state.tasks.lock().await;
+
+    if !state.data.contains_key(&id.to_string()) {
+        Err(Json(TaskResponse {
+            id: id.to_string(),
+            message: "Task doesn't exist".to_string(),
+        }))
+    } else {
+        let task_data = state.data.remove(&id.to_string());
+        println!("Task deketed data: {:?}", task_data);
+
+        Ok(Json(TaskResponse {
+            id: id.to_string(),
+            message: "Task deleted succesfully.".to_string(),
+        }))
     }
 }
 #[derive(Deserialize, Serialize, Debug)]
