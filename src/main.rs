@@ -5,7 +5,7 @@ use axum::{
     body::Body,
     extract::State,
     http::StatusCode,
-    routing::{Route, get, post},
+    routing::{Route, get, post, put},
 };
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
@@ -22,6 +22,7 @@ async fn main() {
         .route("/", get(async || "home"))
         .route("/task", post(add_task))
         .route("/task", get(read_tasks))
+        .route("/task", put(update_task))
         .with_state(state);
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
@@ -75,6 +76,35 @@ async fn read_tasks(State(task): State<Arc<AppState>>) -> Json<TaskReadResponse>
     })
 }
 
+async fn update_task(
+    State(state): State<Arc<AppState>>,
+    Json(data): Json<TaskState>,
+) -> Result<Json<TaskResponse>, (StatusCode, Json<TaskResponse>)> {
+    let mut state = state.tasks.lock().await;
+    let task = TaskState {
+        id: data.id,
+        content: data.content,
+        created_at: data.created_at,
+        updated_at: data.updated_at,
+    };
+
+    if state.data.contains_key(&task.id) {
+        state.data.insert(task.id.clone(), task.clone());
+
+        Ok(Json(TaskResponse {
+            id: task.id,
+            message: "Task updated successfully".to_string(),
+        }))
+    } else {
+        Err((
+            StatusCode::NOT_FOUND,
+            Json(TaskResponse {
+                id: task.id,
+                message: "Task doesn't exist".to_string(),
+            }),
+        ))
+    }
+}
 #[derive(Deserialize, Serialize, Debug)]
 struct TaskReadResponse {
     tasks: Vec<TaskState>,
