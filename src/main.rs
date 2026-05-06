@@ -1,8 +1,10 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, fmt::Error, sync::Arc};
 
 use axum::{
     Json, Router,
+    body::Body,
     extract::State,
+    http::StatusCode,
     routing::{Route, get, post},
 };
 use serde::{Deserialize, Serialize};
@@ -29,29 +31,36 @@ async fn main() {
     axum::serve(listener, app).await.unwrap();
 }
 
-async fn add_task(State(task): State<Arc<AppState>>) -> Json<TaskResponse> {
+async fn add_task(
+    State(task): State<Arc<AppState>>,
+    Json(data): Json<TaskState>,
+) -> Result<Json<TaskResponse>, (StatusCode, Json<TaskResponse>)> {
     println!("Task's state: {:?}", task.tasks);
     let mut state = task.tasks.lock().await;
 
     let task = TaskState {
-        id: "1".to_string(),
-        content: "This is adding task".to_string(),
-        created_at: "12 dec".to_string(),
-        updated_at: "234 dec".to_string(),
+        id: data.id,
+        content: data.content,
+        created_at: data.created_at,
+        updated_at: data.updated_at,
     };
 
-    println!("Task: {:?}", task);
-    // The error is: HashMap::insert returns an Option<V> (the old value if the key existed),
-    // not the new HashMap itself. Assigning that to state.data changes its type to Option<TaskState>,
-    // causing a type mismatch. Instead, you should just call insert:
-    state.data.insert(task.id.clone(), task.clone());
-    // *state.data.insert(task.id.clone(), task.clone());
-
-    println!("State: {:?}", state);
-    Json(TaskResponse {
-        message: "Task has been created successfully".to_string(),
-        id: task.id,
-    })
+    if !state.data.contains_key(&task.id) {
+        state.data.insert(task.id.clone(), task.clone());
+        println!("State: {:?}", state);
+        Ok(Json(TaskResponse {
+            message: "Task has been created successfully".to_string(),
+            id: task.id,
+        }))
+    } else {
+        Err((
+            StatusCode::CONFLICT,
+            Json(TaskResponse {
+                message: "Data already exist".to_string(),
+                id: task.id,
+            }),
+        ))
+    }
 }
 
 async fn read_tasks(State(task): State<Arc<AppState>>) -> Json<TaskReadResponse> {
