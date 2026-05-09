@@ -1,6 +1,3 @@
-use dotenvy::{dotenv, var};
-use std::{collections::HashMap, time::Duration};
-
 use anyhow::Context;
 use axum::{
     Error, Json, Router,
@@ -10,19 +7,20 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{delete, get, post, put},
 };
+use dotenvy::{dotenv, var};
 use serde::{Deserialize, Serialize};
 use sqlx::{
     PgPool, Row,
     postgres::{PgPoolOptions, PgRow},
 };
+use std::{collections::HashMap, time::Duration};
 use tokio::sync::Mutex;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     dotenv().ok();
     let db_url = var("DATABASE_URL").context("Database url must be set")?;
-
-    // let mut conn = sqlx::postgres::PgConnection::connect(url).await?;
+    
     let pool = PgPoolOptions::new()
         .max_connections(5)
         .acquire_timeout(Duration::from_secs(3))
@@ -30,20 +28,8 @@ async fn main() -> anyhow::Result<()> {
         .await
         .context("Failed to connect to Database URL")?;
 
-    // let pool = sqlx::PgPool::connect(url).await?;
-    sqlx::migrate!("./migrations").run(&pool).await?; //add migration to to do
+    sqlx::migrate!("./migrations").run(&pool).await?;
 
-    // let res = sqlx::query("SELECT 'Nishant' as name")
-    //     .fetch_one(&pool)
-    //     .await?;
-
-    // println!("Test result : {:?}", res);
-
-    // let state = Arc::new(AppState {
-    //     tasks: Mutex::new(TaskHash {
-    //         data: HashMap::default(),
-    //     }),
-    // });
     let app = Router::new()
         .route("/", get(async || "home"))
         .route("/task", post(add_task))
