@@ -1,5 +1,5 @@
 use dotenvy::{dotenv, var};
-use std::{ collections::HashMap,};
+use std::{collections::HashMap, time::Duration};
 
 use anyhow::Context;
 use axum::{
@@ -11,7 +11,10 @@ use axum::{
     routing::{delete, get, post, put},
 };
 use serde::{Deserialize, Serialize};
-use sqlx::{PgPool, postgres::PgPoolOptions};
+use sqlx::{
+    PgPool, Row,
+    postgres::{PgPoolOptions, PgRow},
+};
 use tokio::sync::Mutex;
 
 #[tokio::main]
@@ -22,6 +25,7 @@ async fn main() -> anyhow::Result<()> {
     // let mut conn = sqlx::postgres::PgConnection::connect(url).await?;
     let pool = PgPoolOptions::new()
         .max_connections(5)
+        .acquire_timeout(Duration::from_secs(3))
         .connect(&db_url)
         .await
         .context("Failed to connect to Database URL")?;
@@ -64,56 +68,20 @@ async fn add_task(
     State(pool): State<PgPool>,
     Json(data): Json<TaskState>,
 ) -> Result<Json<TaskResponse>, AppError> {
-    println!("Task's pool state: {:?}", pool);
+    // println!("Task's pool state: {:?}", pool);
 
-    let result = sqlx::query("INSERT INTO task (title) VALUES ($1)")
+    let result: PgRow = sqlx::query("INSERT INTO task (title) VALUES ($1) RETURNING id")
         .bind(&data.title)
-        .execute(&pool)
-        .await?;
+        .fetch_one(&pool)
+        .await
+        .context("Failed to insert task")?;
 
-    println!("Insert result: {:?}", result);
-
-    // let id = result.last_insert_rowid();
+    println!("Insert task: {:?}", result.get::<i32, _>("id"));
 
     Ok(Json(TaskResponse {
         message: "Task has been created successfully".to_string(),
-        id: Some(result.rows_affected() as u64),
+        id: Some(result.get::<i32, _>("id")),
     }))
-    // let mut state = task.tasks.lock().await;
-
-    // let task = TaskState {
-    //     id: None,
-    //     title: data.title,
-    // };
-
-    // let result = sqlx::query("INSERT INTO task (title) VALUES ($1)")
-    //     .bind(&data.title)
-    //     .execute(&pool)
-    //     .await?;
-
-    // if !state.data.contains_key(&task.id) {
-    //     state.data.insert(task.id.clone(), task.clone());
-    //     println!("State: {:?}", state);
-    //     Ok(Json(TaskResponse {
-    //         message: "Task has been created successfully".to_string(),
-    //         id: task.id,
-    //     }))
-    // } else {
-    //     Err((
-    //         StatusCode::CONFLICT,
-    //         Json(TaskResponse {
-    //             message: "Data already exist".to_string(),
-    //             id: task.id,
-    //         }),
-    //     ))
-    // }
-
-    // Ok(Json(TaskResponse {
-    //     message: "Task has been created successfully".to_string(),
-    //     id: task.id,
-    // }))
-
-    // todo!()
 }
 
 /*
@@ -207,7 +175,7 @@ struct AppState {
 #[derive(Deserialize, Serialize)]
 struct TaskResponse {
     message: String,
-    id: Option<u64>,
+    id: Option<i32>,
 }
 
 // Make our own error that wraps `anyhow::Error`.
