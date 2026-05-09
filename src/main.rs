@@ -11,8 +11,9 @@ use dotenvy::{dotenv, var};
 use serde::{Deserialize, Serialize};
 use sqlx::{
     PgPool, Row,
-    postgres::{PgPoolOptions, PgRow},
+    postgres::{PgPoolOptions, PgRow}, types::time,
 };
+use ::time::PrimitiveDateTime;
 use std::{collections::HashMap, time::Duration};
 use tokio::sync::Mutex;
 
@@ -20,7 +21,7 @@ use tokio::sync::Mutex;
 async fn main() -> anyhow::Result<()> {
     dotenv().ok();
     let db_url = var("DATABASE_URL").context("Database url must be set")?;
-    
+
     let pool = PgPoolOptions::new()
         .max_connections(5)
         .acquire_timeout(Duration::from_secs(3))
@@ -33,7 +34,7 @@ async fn main() -> anyhow::Result<()> {
     let app = Router::new()
         .route("/", get(async || "home"))
         .route("/task", post(add_task))
-        // .route("/task", get(read_tasks))
+        .route("/task", get(read_tasks))
         // .route("/task", put(update_task))
         // .route("/task/{id}", delete(delete_task))
         .with_state(pool);
@@ -70,19 +71,27 @@ async fn add_task(
     }))
 }
 
-/*
-async fn read_tasks(State(task): State<Arc<AppState>>) -> Json<TaskReadResponse> {
-    let task = task.tasks.lock().await;
-    let tasks = task.data.clone();
-    println!("Tasks: {:?}", tasks);
 
-    // The field `tasks` in `TaskReadResponse` expects a Vec<TaskState> but `task` is a HashMap<String, TaskState>.
-    // You should convert the values of the HashMap into a Vec<TaskState> before returning.
-    Json(TaskReadResponse {
-        tasks: tasks.values().cloned().collect(),
-    })
+async fn read_tasks(State(pool): State<PgPool>) -> Result<Json<TaskReadResponse>, AppError> {
+    let tasks = sqlx::query("SELECT * FROM task")
+        .fetch_all(&pool)
+        .await
+        .context("Failed to fetch tasks")?;
+
+    let tasks = tasks
+        .into_iter()
+        .map(|row| TaskStateResponse {
+            id: Some(row.get::<i32, _>("id")),
+            title: row.get::<String, _>("title"),
+            created_at: row.get::<PrimitiveDateTime, _>("created_at"),
+            updated_at: row.get::<PrimitiveDateTime, _>("updated_at"),
+        })
+        .collect();
+
+    Ok(Json(TaskReadResponse { tasks }))
 }
 
+/*
 async fn update_task(
     State(state): State<Arc<AppState>>,
     Json(data): Json<TaskState>,
@@ -139,7 +148,7 @@ async fn delete_task(
 
 #[derive(Deserialize, Serialize, Debug)]
 struct TaskReadResponse {
-    tasks: Vec<TaskState>,
+    tasks: Vec<TaskStateResponse>,
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
@@ -150,6 +159,13 @@ struct TaskState {
     // updated_at: String,
 }
 
+#[derive(Serialize, Debug, Deserialize, sqlx::FromRow)]
+struct TaskStateResponse {
+    id: Option<i32>,
+    title: String,
+    created_at: PrimitiveDateTime,
+    updated_at: PrimitiveDateTime,
+}
 #[derive(Deserialize, Serialize, Debug, Clone)]
 struct TaskHash {
     data: HashMap<String, TaskState>,
