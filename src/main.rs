@@ -1,3 +1,4 @@
+use ::time::PrimitiveDateTime;
 use anyhow::Context;
 use axum::{
     Error, Json, Router,
@@ -11,9 +12,9 @@ use dotenvy::{dotenv, var};
 use serde::{Deserialize, Serialize};
 use sqlx::{
     PgPool, Row,
-    postgres::{PgPoolOptions, PgRow}, types::time,
+    postgres::{PgPoolOptions, PgRow},
+    types::time,
 };
-use ::time::PrimitiveDateTime;
 use std::{collections::HashMap, time::Duration};
 use tokio::sync::Mutex;
 
@@ -35,8 +36,8 @@ async fn main() -> anyhow::Result<()> {
         .route("/", get(async || "home"))
         .route("/task", post(add_task))
         .route("/task", get(read_tasks))
-        // .route("/task", put(update_task))
-        // .route("/task/{id}", delete(delete_task))
+        .route("/task", put(update_task))
+        .route("/task/{id}", delete(delete_task))
         .with_state(pool);
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000")
@@ -71,7 +72,6 @@ async fn add_task(
     }))
 }
 
-
 async fn read_tasks(State(pool): State<PgPool>) -> Result<Json<TaskReadResponse>, AppError> {
     let tasks = sqlx::query("SELECT * FROM task")
         .fetch_all(&pool)
@@ -91,60 +91,66 @@ async fn read_tasks(State(pool): State<PgPool>) -> Result<Json<TaskReadResponse>
     Ok(Json(TaskReadResponse { tasks }))
 }
 
-/*
 async fn update_task(
-    State(state): State<Arc<AppState>>,
-    Json(data): Json<TaskState>,
-) -> Result<Json<TaskResponse>, (StatusCode, Json<TaskResponse>)> {
-    let mut state = state.tasks.lock().await;
-    let task = TaskState {
-        id: data.id,
-        content: data.content,
-        created_at: data.created_at,
-        updated_at: data.updated_at,
-    };
+    State(pool): State<PgPool>,
+    Json(data): Json<TaskStateUpdate>,
+) -> Result<Json<TaskResponse>, AppError> {
+    let task = sqlx::query("UPDATE task SET title = $1 WHERE id = $2 RETURNING id")
+        .bind(&data.title)
+        .bind(data.id)
+        .fetch_one(&pool)
+        .await
+        .context("Failed to update task")?;
 
-    if state.data.contains_key(&task.id) {
-        state.data.insert(task.id.clone(), task.clone());
+    println!("Update task: {:?}", task.get::<i32, _>("id"));
 
-        Ok(Json(TaskResponse {
-            id: task.id,
-            message: "Task updated successfully".to_string(),
-        }))
-    } else {
-        Err((
-            StatusCode::NOT_FOUND,
-            Json(TaskResponse {
-                id: task.id,
-                message: "Task doesn't exist".to_string(),
-            }),
-        ))
-    }
+    Ok(Json(TaskResponse {
+        message: "Task has been updated successfully".to_string(),
+        id: Some(task.get::<i32, _>("id")),
+    }))
 }
 
 async fn delete_task(
-    State(state): State<Arc<AppState>>,
-    Path(id): Path<u32>,
-) -> Result<Json<TaskResponse>, Json<TaskResponse>> {
-    let mut state = state.tasks.lock().await;
+    State(pool): State<PgPool>,
+    Path(id): Path<i32>,
+) -> Result<Json<TaskResponse>, AppError> {
+    /*
+    First check if the task exists
+    Then delete the task
+     */
 
-    if !state.data.contains_key(&id.to_string()) {
-        Err(Json(TaskResponse {
-            id: id.to_string(),
-            message: "Task doesn't exist".to_string(),
-        }))
+    let task = sqlx::query("SELECT * FROM task WHERE id = $1")
+        .bind(id)
+        .fetch_one(&pool)
+        .await
+        .context("No task found with the given ID")?;
+
+    println!("Deleting task: {:?}", task.get::<i32, _>("id"));
+
+    if task.is_empty() {
+        // return Err((
+        //     StatusCode::NOT_FOUND,
+        //     Json(TaskResponse {
+        //         message: "Task not found".to_string(),
+        //         id: None,
+        //     }),
+        // ));
+
+        return Err(AppError(anyhow::anyhow!("Task not found")));
     } else {
-        let task_data = state.data.remove(&id.to_string());
-        println!("Task deketed data: {:?}", task_data);
+        // Delete the task
+        sqlx::query("DELETE FROM task WHERE id = $1")
+            .bind(id)
+            .execute(&pool)
+            .await
+            .context("Failed to delete task")?;
 
         Ok(Json(TaskResponse {
-            id: id.to_string(),
-            message: "Task deleted succesfully.".to_string(),
+            message: "Task has been deleted successfully".to_string(),
+            id: Some(task.get::<i32, _>("id")),
         }))
     }
 }
-
-*/
 
 #[derive(Deserialize, Serialize, Debug)]
 struct TaskReadResponse {
@@ -157,6 +163,12 @@ struct TaskState {
     title: String,
     // created_at: String,
     // updated_at: String,
+}
+
+#[derive(Deserialize, Serialize, Debug, Clone)]
+struct TaskStateUpdate {
+    id: i32,
+    title: String,
 }
 
 #[derive(Serialize, Debug, Deserialize, sqlx::FromRow)]
