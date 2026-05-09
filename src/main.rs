@@ -1,70 +1,122 @@
-use std::{collections::HashMap, fmt::Error, sync::Arc};
+use dotenvy::{dotenv, var};
+use std::{ collections::HashMap,};
 
+use anyhow::Context;
 use axum::{
-    Json, Router,
+    Error, Json, Router,
     body::Body,
     extract::{Path, State},
     http::StatusCode,
-    routing::{Route, delete, get, post, put},
+    response::{IntoResponse, Response},
+    routing::{delete, get, post, put},
 };
 use serde::{Deserialize, Serialize};
+use sqlx::{PgPool, postgres::PgPoolOptions};
 use tokio::sync::Mutex;
 
 #[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    dotenv().ok();
+    let db_url = var("DATABASE_URL").context("Database url must be set")?;
 
-async fn main() {
-    let state = Arc::new(AppState {
-        tasks: Mutex::new(TaskHash {
-            data: HashMap::default(),
-        }),
-    });
+    // let mut conn = sqlx::postgres::PgConnection::connect(url).await?;
+    let pool = PgPoolOptions::new()
+        .max_connections(5)
+        .connect(&db_url)
+        .await
+        .context("Failed to connect to Database URL")?;
+
+    // let pool = sqlx::PgPool::connect(url).await?;
+    sqlx::migrate!("./migrations").run(&pool).await?; //add migration to to do
+
+    // let res = sqlx::query("SELECT 'Nishant' as name")
+    //     .fetch_one(&pool)
+    //     .await?;
+
+    // println!("Test result : {:?}", res);
+
+    // let state = Arc::new(AppState {
+    //     tasks: Mutex::new(TaskHash {
+    //         data: HashMap::default(),
+    //     }),
+    // });
     let app = Router::new()
         .route("/", get(async || "home"))
         .route("/task", post(add_task))
-        .route("/task", get(read_tasks))
-        .route("/task", put(update_task))
-        .route("/task/{id}", delete(delete_task))
-        .with_state(state);
+        // .route("/task", get(read_tasks))
+        // .route("/task", put(update_task))
+        // .route("/task/{id}", delete(delete_task))
+        .with_state(pool);
 
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000")
+        .await
+        .context("Failed to listen on port: 3000")?;
 
     println!("Server is listening : {}", listener.local_addr().unwrap());
 
-    axum::serve(listener, app).await.unwrap();
+    axum::serve(listener, app).await?;
+
+    Ok(())
 }
 
+#[axum::debug_handler]
 async fn add_task(
-    State(task): State<Arc<AppState>>,
+    State(pool): State<PgPool>,
     Json(data): Json<TaskState>,
-) -> Result<Json<TaskResponse>, (StatusCode, Json<TaskResponse>)> {
-    println!("Task's state: {:?}", task.tasks);
-    let mut state = task.tasks.lock().await;
+) -> Result<Json<TaskResponse>, AppError> {
+    println!("Task's pool state: {:?}", pool);
 
-    let task = TaskState {
-        id: data.id,
-        content: data.content,
-        created_at: data.created_at,
-        updated_at: data.updated_at,
-    };
+    let result = sqlx::query("INSERT INTO task (title) VALUES ($1)")
+        .bind(&data.title)
+        .execute(&pool)
+        .await?;
 
-    if !state.data.contains_key(&task.id) {
-        state.data.insert(task.id.clone(), task.clone());
-        println!("State: {:?}", state);
-        Ok(Json(TaskResponse {
-            message: "Task has been created successfully".to_string(),
-            id: task.id,
-        }))
-    } else {
-        Err((
-            StatusCode::CONFLICT,
-            Json(TaskResponse {
-                message: "Data already exist".to_string(),
-                id: task.id,
-            }),
-        ))
-    }
+    println!("Insert result: {:?}", result);
+
+    // let id = result.last_insert_rowid();
+
+    Ok(Json(TaskResponse {
+        message: "Task has been created successfully".to_string(),
+        id: Some(result.rows_affected() as u64),
+    }))
+    // let mut state = task.tasks.lock().await;
+
+    // let task = TaskState {
+    //     id: None,
+    //     title: data.title,
+    // };
+
+    // let result = sqlx::query("INSERT INTO task (title) VALUES ($1)")
+    //     .bind(&data.title)
+    //     .execute(&pool)
+    //     .await?;
+
+    // if !state.data.contains_key(&task.id) {
+    //     state.data.insert(task.id.clone(), task.clone());
+    //     println!("State: {:?}", state);
+    //     Ok(Json(TaskResponse {
+    //         message: "Task has been created successfully".to_string(),
+    //         id: task.id,
+    //     }))
+    // } else {
+    //     Err((
+    //         StatusCode::CONFLICT,
+    //         Json(TaskResponse {
+    //             message: "Data already exist".to_string(),
+    //             id: task.id,
+    //         }),
+    //     ))
+    // }
+
+    // Ok(Json(TaskResponse {
+    //     message: "Task has been created successfully".to_string(),
+    //     id: task.id,
+    // }))
+
+    // todo!()
 }
 
+/*
 async fn read_tasks(State(task): State<Arc<AppState>>) -> Json<TaskReadResponse> {
     let task = task.tasks.lock().await;
     let tasks = task.data.clone();
@@ -128,6 +180,9 @@ async fn delete_task(
         }))
     }
 }
+
+*/
+
 #[derive(Deserialize, Serialize, Debug)]
 struct TaskReadResponse {
     tasks: Vec<TaskState>,
@@ -135,10 +190,10 @@ struct TaskReadResponse {
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
 struct TaskState {
-    id: String,
-    content: String,
-    created_at: String,
-    updated_at: String,
+    id: Option<i32>,
+    title: String,
+    // created_at: String,
+    // updated_at: String,
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
@@ -152,8 +207,38 @@ struct AppState {
 #[derive(Deserialize, Serialize)]
 struct TaskResponse {
     message: String,
-    id: String,
+    id: Option<u64>,
 }
+
+// Make our own error that wraps `anyhow::Error`.
+struct AppError(anyhow::Error);
+
+// Tell axum how to convert `AppError` into a response.
+impl IntoResponse for AppError {
+    fn into_response(self) -> Response {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            // format!("Something went wrong: {}", self),
+            Json(TaskResponse {
+                message: "Something went wrong".to_string(),
+                id: None,
+            }),
+        )
+            .into_response()
+    }
+}
+
+// This enables using `?` on functions that return `Result<_, anyhow::Error>` to turn them into
+// `Result<_, AppError>`. That way you don't need to do that manually.
+impl<E> From<E> for AppError
+where
+    E: Into<anyhow::Error>,
+{
+    fn from(err: E) -> Self {
+        Self(err.into())
+    }
+}
+
 /*
 1. create a appstate struct
 2. create a simple server
@@ -165,4 +250,10 @@ struct TaskResponse {
 
 7. setup db
 8. create , read, update and delete function update
+
+------
+
+1. setup db
+2. test db
+3. create read update and then delete
 */
